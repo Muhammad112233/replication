@@ -1,0 +1,133 @@
+-------Installation and Configuration of pgpool-II-12------------
+--lets assume two servers
+
+server1
+server2
+
+--postgresql running on both servers and streaming replication through repmgr
+
+--install the rpm packages of pgpool-II on both
+
+pgpool-II-12-4.1.1-1.rhel7.x86_64
+pgpool-II-12-devel-4.1.1-1.rhel7.x86_64
+pgpool-II-12-extensions-4.1.1-1.rhel7.x86_64
+
+--after installation apply below setting on both
+
+@psql
+@create user pgpool;
+@GRANT ALL PRIVILEGES ON DATABASE "postgres" to pgpool;
+@create extension pgpool_recovery;
+@create extension pgpool_adm;
+@\q
+
+--set permissions on both.
+
+chown -R postgres:postgres /etc/pgpool-II-12
+chown -R postgres:postgres /var/log/pgpool-II-12
+chown -R postgres:postgres /var/run/pgpool-II-12
+chown -R postgres:postgres /usr/pgpool-12
+
+--edit the configuration file on both servers.
+
+@nano /etc/pgpool-II-12/pgpool.conf.sample --rename pgpool.conf
+
+listen_addresses = '*'
+port = 9999
+socket_dir = '/var/run/pgpool-II-12'
+pcp_listen_addresses = '*'
+pcp_port = 9898
+pcp_socket_dir = '/var/run/pgpool-II-12'
+backend_hostname0 = 'server1'
+backend_port0 = 5432
+backend_data_directory0 = 'pg_config'
+backend_flag0 = 'ALLOW_TO_FAILOVER'
+backend_hostname1 = 'server2'
+backend_port1 = 5432
+backend_data_directory1 = 'pg_config'
+backend_flag1 = 'ALLOW_TO_FAILOVER'
+enable_pool_hba = on
+log_destination = 'stderr'
+log_connections = on
+log_hostname = on
+log_statement = on
+log_min_messages = debug1
+pid_file_name = '/var/run/pgpoolpid/pgpool.pid'
+logdir = '/var/log/pgpool-II-12'
+replication_mode = off
+replicate_select = off
+load_balance_mode = on
+master_slave_mode = on
+master_slave_sub_mode = 'stream'
+sr_check_user = 'repmgr'
+sr_check_database = 'repmgr'
+health_check_user = 'pgpool'
+health_check_database = 'postgres'
+failover_command = '/etc/pgpool-II-12/failover.sh %d %P %H %R'
+recovery_user = 'repmgr'
+delegate_ip = 'virtual_ip'	#provided by network administrator
+use_watchdog = on
+wd_hostname = 'server1'
+wd_port = 9000
+wd_ipc_socket_dir = '/var/run/pgpool-II-12'
+heartbeat_destination0 = 'server2'
+other_pgpool_hostname0 = 'server2'
+other_pgpool_port0 = 9999
+other_wd_port0 = 9000
+
+--on server2
+--just minor change required
+
+wd_hostname = 'server2'
+heartbeat_destination0 = 'server1'
+other_pgpool_hostname0 = 'server1'
+
+--edit the failover.sh.sample on both
+
+@nano /etc/pgpool-II-12/failover.sh.sample --rename failover.sh
+
+#!/bin/sh
+failed_node=$1
+new_master=$2
+(
+date
+echo "Failed node: $failed_node"
+set -x
+/usr/bin/ssh -T -l postgres@$new_master "repmgr  standby promote 2>/dev/null 1>/dev/null <&-"
+exit 0;
+) 2>&1 | tee -a /var/log/pgpool-II-12/failover.log
+
+@nano /etc/pgpool-II-12/pool_hba.conf.sample --rename pool_hba.conf
+
+TYPE  DATABASE    USER        CIDR-ADDRESS          METHOD
+host    all         all         0.0.0.0/0             trust
+
+--edit rsyslog on both servers
+
+@nano /etc/rsyslog.conf
+
+LOCAL0.*                                                /var/log/pgpool-II-12/pgpool.log
+
+--restart log service on both servers
+
+@systemctl restart rsyslog.service
+
+--now start pgpool on both
+
+@systemctl start pgpool-II-12.service
+
+--check wheather both servers are connected and communicating successfully
+
+@psql -U pgpool -d postgres -h virtual_ip -p 9999 -c "show pool_nodes"
+
+ node_id |   hostname    | port | status | lb_weight |  role   | select_cnt | load_balance_node | replication_delay | replica
+tion_state | replication_sync_state | last_status_change
+---------+---------------+------+--------+-----------+---------+------------+-------------------+-------------------+--------
+-----------+------------------------+---------------------
+ 0       | 10.70.100.199 | 5432 | down   | 0.500000  | standby | 0          | false             | 0                 |
+           |                        | 2020-05-18 15:43:02
+ 1       | 10.70.100.8   | 5432 | up     | 0.500000  | primary | 0          | true              | 0                 |
+           |                        | 2020-05-18 15:43:02
+(2 rows)
+
+--if it shows like above then it configured successfully.
