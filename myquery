@@ -1,0 +1,1190 @@
+explain
+ SELECT mview.settlement_date,
+    mview.uin,
+    u.uin_name,
+    mview.participant_id,
+    elg.name AS cm_name,
+    mview.isin,
+    s.symbol,
+    mview.account_number,
+    mview.qty AS market_qty,
+    mview.rate AS market_rate,
+    mview.qty * mview.rate - mview.sell_expense AS taxable_net_amount,
+    mview.sell_value AS market_sell_value,
+    mview.cgt_taxiable_qty,
+    mview.tax_rate,
+    mview.tax_out_value,
+    mview.cgt_nontax_qty,
+    mview.intax_rate,
+    mview.intax_out_value,
+    mview.inv_outgoing_qty AS profit_loss_qty,
+    mview.profit_loss,
+    mview.duration,
+        CASE
+            WHEN mview.profit_loss > 0 THEN round(mview.cgt * 100 / mview.profit_loss, 2)
+            ELSE 0
+        END AS tax_percent,
+    mview.cgt,
+    mview.sell_expense,
+    mview.inv_participant_id,
+    mview.inv_account_number,
+    mview.inventory_date,
+    mview.inv_outgoing_qty,
+    mview.inv_price,
+    mview.inv_avg_price,
+    mview.inv_outgoing_qty * mview.inv_avg_price AS amount,
+    row_number() OVER (PARTITION BY mview.settlement_date, mview.uin, mview.participant_id, mview.isin, mview.account_number ORDER BY mview.settlement_date, mview.uin, mview.participant_id, mview.isin, mview.account_number) AS duplicate_count,
+    1461 AS period_from,
+    mview.trans_type,
+    mview.trn_code,
+    mview.reason_code
+   FROM ( SELECT temp.settlement_date,
+            temp.uin,
+            temp.participant_id,
+            temp.isin,
+            temp.account_number,
+            sum(temp.sell_qty) AS qty,
+                CASE
+                    WHEN sum(temp.sell_qty) > 0 THEN sum(temp.sell_value) / sum(temp.sell_qty)
+                    ELSE 0
+                END AS rate,
+            sum(temp.sell_value) AS sell_value,
+            sum(temp.cgt_taxiable_qty) AS cgt_taxiable_qty,
+            sum(temp.cgt_nontax_qty) AS cgt_nontax_qty,
+            sum(temp.tax_outgoing_value) AS tax_out_value,
+            sum(temp.in_tax_outgoing_value) AS intax_out_value,
+                CASE
+                    WHEN sum(temp.cgt_nontax_qty) > 0 THEN sum(temp.in_tax_outgoing_value) / sum(temp.cgt_nontax_qty)
+                    ELSE 0
+                END AS intax_rate,
+                CASE
+                    WHEN sum(temp.cgt_taxiable_qty) > 0 THEN sum(temp.tax_outgoing_value) / sum(temp.cgt_taxiable_qty)
+                    ELSE 0
+                END AS tax_rate,
+            sum(temp.sell_expense) AS sell_expense,
+            temp.inv_participant_id,
+            temp.inv_account_number,
+            sum(temp.inv_outgoing_qty) AS inv_outgoing_qty,
+            avg(temp.inv_price) AS inv_price,
+            temp.inventory_date,
+            avg(temp.inv_avg_price) AS inv_avg_price,
+                CASE
+                    WHEN sum(temp.sell_qty) > 0 THEN sum(temp.profit_loss_sale)
+                    ELSE
+                    CASE
+                        WHEN sum(temp.cgt_taxiable_qty) > 0 THEN sum(temp.profit_loss_taxable)
+                        ELSE 0
+                    END
+                END AS profit_loss,
+                CASE
+                    WHEN sum(temp.sell_qty) > 0 THEN round(avg(temp.duration_sale))
+                    ELSE
+                    CASE
+                        WHEN sum(temp.duration_taxable) > 0 THEN round(avg(temp.duration_taxable))
+                        ELSE 0
+                    END
+                END AS duration,
+                CASE
+                    WHEN sum(temp.sell_qty) > 0 THEN sum(temp.cgt_sale)
+                    ELSE
+                    CASE
+                        WHEN sum(temp.cgt_taxable) > 0 THEN sum(temp.cgt_taxable)
+                        ELSE 0
+                    END
+                END AS cgt,
+            sum(temp.profit_loss_qty_sale) AS profit_loss_qty_sale,
+            temp.trans_type,
+            temp.trn_code,
+            temp.reason_code
+           FROM ( SELECT c.settlement_date,
+                    c.uin,
+                    c.participant_id,
+                    c.isin,
+                    c.account_number,
+                    gl.inv_outgoing_qty AS sell_qty,
+                    c.sell_price AS sell_rate,
+                    c.sell_price * gl.inv_outgoing_qty AS sell_value,
+                    0 AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    round(c.sell_expense / c.sell_qty * gl.inv_outgoing_qty, 4) AS sell_expense,
+                    gl.inv_participant_id,
+                    gl.inv_account_number,
+                    gl.inv_outgoing_qty,
+                    gl.inv_price,
+                    gl.inventory_date,
+                    gl.inv_avg_price,
+                    plv.profit_loss_qty AS profit_loss_qty_sale,
+                        CASE
+                            WHEN plv.profit_loss_qty = 0 THEN plv.profit_loss_qty
+                            ELSE plv.profit_loss / plv.profit_loss_qty
+                        END * gl.inv_outgoing_qty AS profit_loss_sale,
+                    plv.duration AS duration_sale,
+                        CASE
+                            WHEN plv.profit_loss = 0 THEN plv.profit_loss
+                            ELSE plv.cgt / plv.profit_loss
+                        END * (
+                        CASE
+                            WHEN plv.profit_loss_qty = 0 THEN plv.profit_loss_qty
+                            ELSE plv.profit_loss / plv.profit_loss_qty
+                        END * gl.inv_outgoing_qty) AS cgt_sale,
+                    plv.tax_percent AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Market Based' AS trans_type,
+                    '' AS trn_code,
+                    '' AS reason_code
+                   FROM cgtlive.cgt_account_sale c,
+                    cgtlive.cgt_global_fifo_inv_relation gl,
+                    ( SELECT cgt_profitloss_vw_with_inv_id.transaction_date,
+    cgt_profitloss_vw_with_inv_id.participant_id,
+    cgt_profitloss_vw_with_inv_id.isin,
+    cgt_profitloss_vw_with_inv_id.uin,
+    cgt_profitloss_vw_with_inv_id.account_number,
+    cgt_profitloss_vw_with_inv_id.profit_loss_qty,
+    cgt_profitloss_vw_with_inv_id.profit_loss,
+    cgt_profitloss_vw_with_inv_id.duration,
+    cgt_profitloss_vw_with_inv_id.tax_percent,
+    cgt_profitloss_vw_with_inv_id.cgt,
+    cgt_profitloss_vw_with_inv_id.type,
+    cgt_profitloss_vw_with_inv_id.inventory_date,
+    cgt_profitloss_vw_with_inv_id.inv_id,
+    cgt_profitloss_vw_with_inv_id.filer_non_filer
+   FROM cgt_bef_list.cgt_profitloss_vw_with_inv_id
+   where cgt_profitloss_vw_with_inv_id.transaction_date between '01/01/2019' and '31/01/2019'
+UNION ALL
+ SELECT cgt_profitloss_vw_with_inv_id.transaction_date,
+    cgt_profitloss_vw_with_inv_id.participant_id,
+    cgt_profitloss_vw_with_inv_id.isin,
+    cgt_profitloss_vw_with_inv_id.uin,
+    cgt_profitloss_vw_with_inv_id.account_number,
+    cgt_profitloss_vw_with_inv_id.profit_loss_qty,
+    cgt_profitloss_vw_with_inv_id.profit_loss,
+    cgt_profitloss_vw_with_inv_id.duration,
+    cgt_profitloss_vw_with_inv_id.tax_percent,
+    cgt_profitloss_vw_with_inv_id.cgt,
+    cgt_profitloss_vw_with_inv_id.type,
+    cgt_profitloss_vw_with_inv_id.inventory_date,
+    cgt_profitloss_vw_with_inv_id.inv_id,
+    cgt_profitloss_vw_with_inv_id.filer_non_filer
+   FROM cgtlive.cgt_profitloss_vw_with_inv_id
+   where cgt_profitloss_vw_with_inv_id.transaction_date between '01/01/2019' and '31/01/2019' ) plv,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE c.market_tran_id = gl.all_type_out_id AND gl.outgoing_type = 'M' AND c.settlement_date  between '01/01/2019' and '31/01/2019' AND plv.transaction_date = c.settlement_date AND plv.transaction_date = gl.transaction_date AND plv.isin = gl.isin AND plv.uin = gl.uin AND c.participant_id = elg_1.participant_id AND gl.participant_id = elg_1.participant_id AND plv.participant_id = gl.participant_id AND plv.account_number = gl.account_number AND plv.inv_id = gl.inv_id AND plv.transaction_date = gl.transaction_date AND c.settlement_date = gl.transaction_date
+                UNION ALL
+                 SELECT t.transaction_date AS settlement_date,
+                    t.uin,
+                    t.participant_id,
+                    t.isin,
+                    t.account_number,
+                    gl.inv_outgoing_qty AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    0 AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    gl.inv_participant_id,
+                    gl.inv_account_number,
+                    gl.inv_outgoing_qty,
+                    gl.inv_price,
+                    gl.inventory_date,
+                    gl.inv_avg_price,
+                    t.profit_loss_qty AS profit_loss_qty_sale,
+                        CASE
+                            WHEN t.profit_loss_qty = 0 THEN t.profit_loss_qty
+                            ELSE t.profit_loss / t.profit_loss_qty
+                        END * gl.inv_outgoing_qty AS profit_loss_sale,
+                    t.duration AS duration_sale,
+                        CASE
+                            WHEN t.profit_loss = 0 THEN t.profit_loss
+                            ELSE t.cgt / t.profit_loss
+                        END * (
+                        CASE
+                            WHEN t.profit_loss_qty = 0 THEN t.profit_loss_qty
+                            ELSE t.profit_loss / t.profit_loss_qty
+                        END * gl.inv_outgoing_qty) AS cgt_sale,
+                    t.tax_percent AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Market Based' AS trans_type,
+                    '' AS trn_code,
+                    '' AS reason_code
+                   FROM cgtlive.cgt_global_fifo_inv_relation gl,
+                    ( SELECT cgt_profitloss_vw_with_inv_id.transaction_date,
+    cgt_profitloss_vw_with_inv_id.participant_id,
+    cgt_profitloss_vw_with_inv_id.isin,
+    cgt_profitloss_vw_with_inv_id.uin,
+    cgt_profitloss_vw_with_inv_id.account_number,
+    cgt_profitloss_vw_with_inv_id.profit_loss_qty,
+    cgt_profitloss_vw_with_inv_id.profit_loss,
+    cgt_profitloss_vw_with_inv_id.duration,
+    cgt_profitloss_vw_with_inv_id.tax_percent,
+    cgt_profitloss_vw_with_inv_id.cgt,
+    cgt_profitloss_vw_with_inv_id.type,
+    cgt_profitloss_vw_with_inv_id.inventory_date,
+    cgt_profitloss_vw_with_inv_id.inv_id,
+    cgt_profitloss_vw_with_inv_id.filer_non_filer
+   FROM cgt_bef_list.cgt_profitloss_vw_with_inv_id
+   where cgt_profitloss_vw_with_inv_id.transaction_date between '01/01/2019' and '31/01/2019'
+UNION ALL
+ SELECT cgt_profitloss_vw_with_inv_id.transaction_date,
+    cgt_profitloss_vw_with_inv_id.participant_id,
+    cgt_profitloss_vw_with_inv_id.isin,
+    cgt_profitloss_vw_with_inv_id.uin,
+    cgt_profitloss_vw_with_inv_id.account_number,
+    cgt_profitloss_vw_with_inv_id.profit_loss_qty,
+    cgt_profitloss_vw_with_inv_id.profit_loss,
+    cgt_profitloss_vw_with_inv_id.duration,
+    cgt_profitloss_vw_with_inv_id.tax_percent,
+    cgt_profitloss_vw_with_inv_id.cgt,
+    cgt_profitloss_vw_with_inv_id.type,
+    cgt_profitloss_vw_with_inv_id.inventory_date,
+    cgt_profitloss_vw_with_inv_id.inv_id,
+    cgt_profitloss_vw_with_inv_id.filer_non_filer
+   FROM cgtlive.cgt_profitloss_vw_with_inv_id
+   where cgt_profitloss_vw_with_inv_id.transaction_date between '01/01/2019' and '31/01/2019') t,
+                    ( SELECT cgt_eligible_uin_all.uin,
+                            cgt_eligible_uin_all.uin_name
+                           FROM cgtlive.cgt_eligible_uin_all
+					 		left join cgtlive.cgt_ipo_uin on cgt_eligible_uin_all.uin = cgt_ipo_uin.ipo_uin where cgt_ipo_uin.ipo_uin is null) u_1,
+                    ncsslive.cgt_eligible_cm elg_1,
+                    ncsslive.security s_1
+                  WHERE gl.inventory_date = t.inventory_date AND gl.transaction_date = t.transaction_date AND u_1.uin = t.uin AND elg_1.participant_id = t.participant_id AND gl.isin = t.isin AND t.isin = s_1.isin AND gl.account_number = t.account_number AND gl.participant_id = t.participant_id AND gl.uin = t.uin AND t.inv_id = gl.inv_id AND gl.all_type_out_id IS NULL AND t.transaction_date between '01/01/2019' and '31/01/2019'  AND  gl.transaction_date between '01/01/2019' and '31/01/2019'   AND gl.profit_loss_tag = 'Y'
+                UNION ALL
+                 SELECT t.transaction_date AS settlement_date,
+                    t.uin,
+                    t.participant_id,
+                    t.isin,
+                    t.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    gl.inv_outgoing_qty AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    gl.inv_outgoing_qty * t.outgoing_price AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    gl.inv_participant_id,
+                    gl.inv_account_number,
+                    gl.inv_outgoing_qty,
+                    gl.inv_price,
+                    gl.inventory_date,
+                    gl.inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Non-Market Based' AS trans_type,
+                    t.trn_code,
+                    t.reason_code
+                   FROM cgtlive.cgt_global_fifo_inv_relation gl,
+                    cgtlive.cgt_corporateaction_outgoing t
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON t.transaction_date = fnf.settlement_date AND t.uin = fnf.uin,
+                    ( SELECT cgt_eligible_uin_all.uin,
+                            cgt_eligible_uin_all.uin_name
+                           FROM cgtlive.cgt_eligible_uin_all
+					 		left join cgtlive.cgt_ipo_uin on cgt_eligible_uin_all.uin = cgt_ipo_uin.ipo_uin where cgt_ipo_uin.ipo_uin is null
+                          ) u_1,
+                    ncsslive.cgt_eligible_cm elg_1,
+                    ncsslive.security s_1
+                  WHERE gl.transaction_date = t.transaction_date AND u_1.uin = t.uin AND elg_1.participant_id = t.participant_id AND gl.isin = t.isin AND t.isin = s_1.isin AND gl.account_number = t.account_number AND gl.participant_id = t.participant_id AND gl.uin = t.uin AND gl.all_type_out_id = t.ncc_trn_id AND gl.all_type_out_det_id = t.acc_out_id AND gl.transaction_date between '01/01/2019' and '31/01/2019' AND t.transaction_date between '01/01/2019' and '31/01/2019' AND gl.profit_loss_tag = 'Y' AND t.trn_code = 'E060' AND t.opr_code = 'DLST' AND s_1.sec_type_id = 3::text AND gl.inv_price = 0
+                UNION ALL
+                 SELECT sub1.settlement_date,
+                    sub1.uin,
+                    sub1.participant_id,
+                    sub1.isin,
+                    sub1.account_number,
+                    sub1.sell_qty,
+                    sub1.sell_rate,
+                    sub1.sell_value,
+                    sub1.cgt_taxiable_qty,
+                    sub1.cgt_nontax_qty,
+                    sub1.tax_outgoing_value,
+                    sub1.in_tax_outgoing_value,
+                    sub1.sell_expense,
+                    sub1.inv_participant_id,
+                    sub1.inv_account_number,
+                    sub1.inv_outgoing_qty,
+                    sub1.inv_price,
+                    sub1.inventory_date,
+                    sub1.inv_avg_price,
+                    sub1.profit_loss_sale,
+                    sub1.profit_loss_qty_sale,
+                    sub1.duration_sale,
+                    sub1.cgt_sale,
+                    sub1.tax_percent_sale,
+                        CASE
+                            WHEN sub1.profit_loss_qty_taxable = 0 THEN sub1.profit_loss_qty_taxable
+                            ELSE sub1.profit_loss_taxable / sub1.profit_loss_qty_taxable
+                        END * sub1.cgt_taxiable_qty AS profit_loss_taxable,
+                    sub1.profit_loss_qty_taxable,
+                    sub1.duration_taxable,
+                        CASE
+                            WHEN sub1.profit_loss_taxable = 0 THEN sub1.profit_loss_taxable
+                            ELSE sub1.cgt_taxable / sub1.profit_loss_taxable
+                        END * (
+                        CASE
+                            WHEN sub1.profit_loss_qty_taxable = 0 THEN sub1.profit_loss_qty_taxable
+                            ELSE sub1.profit_loss_taxable / sub1.profit_loss_qty_taxable
+                        END * sub1.cgt_taxiable_qty) AS cgt_taxable,
+                    sub1.tax_percent_taxable,
+                    sub1.trans_type,
+                    sub1.trn_code,
+                    sub1.reason_code
+                   FROM ( SELECT oug.settlement_date,
+                            oug.uin,
+                            oug.participant_id,
+                            oug.isin,
+                            oug.account_number,
+                            0 AS sell_qty,
+                            0 AS sell_rate,
+                            0 AS sell_value,
+                            oug.cgt_taxiable_qty,
+                            0 AS cgt_nontax_qty,
+                            oug.tax_outgoing_value,
+                            0 AS in_tax_outgoing_value,
+                            0 AS sell_expense,
+                            oug.inv_participant_id,
+                            oug.inv_account_number,
+                            oug.inv_outgoing_qty,
+                            oug.inv_price,
+                            oug.inventory_date,
+                            oug.inv_avg_price,
+                            0 AS profit_loss_sale,
+                            0 AS profit_loss_qty_sale,
+                            0 AS duration_sale,
+                            0 AS cgt_sale,
+                            0 AS tax_percent_sale,
+                            sum(p.profit_loss) AS profit_loss_taxable,
+                            avg(p.profit_loss_qty) AS profit_loss_qty_taxable,
+                            avg(p.duration) AS duration_taxable,
+                            sum(p.cgt) AS cgt_taxable,
+                            avg(p.tax_percent) AS tax_percent_taxable,
+                            'Non-Market Based' AS trans_type,
+                            oug.trn_code,
+                            oug.tax_reason AS reason_code
+                           FROM ( SELECT o.settlement_date,
+                                    o.uin,
+                                    o.participant_id,
+                                    o.isin,
+                                    o.account_number,
+                                    0 AS sell_qty,
+                                    0 AS sell_qty,
+                                    0 AS sell_rate,
+                                    0 AS sell_value,
+                                    o.inv_id,
+                                    o.transaction_date,
+                                    sum(o.cgt_taxiable_qty) AS cgt_taxiable_qty,
+                                    sum(o.cgt_nontax_qty) AS cgt_nontax_qty,
+                                    sum(o.tax_outgoing_value) AS tax_outgoing_value,
+                                    0 AS in_tax_outgoing_value,
+                                    0 AS sell_expense,
+                                    o.inv_participant_id,
+                                    o.inv_account_number,
+                                    sum(o.inv_outgoing_qty) AS inv_outgoing_qty,
+                                    avg(o.inv_price) AS inv_price,
+                                    o.inventory_date,
+                                    avg(o.inv_avg_price) AS inv_avg_price,
+                                    o.trn_code,
+                                    o.tax_reason
+                                   FROM ( SELECT c.settlement_date,
+    c.uin,
+    c.participant_id,
+    c.isin,
+    c.account_number,
+    0 AS sell_qty,
+    0 AS sell_rate,
+    0 AS sell_value,
+    gl.inv_outgoing_qty AS cgt_taxiable_qty,
+    0 AS cgt_nontax_qty,
+    gl.inv_outgoing_qty * c.outgoing_price AS tax_outgoing_value,
+    0 AS in_tax_outgoing_value,
+    0 AS sell_expense,
+    gl.inv_participant_id,
+    gl.inv_account_number,
+    gl.inv_outgoing_qty,
+    gl.inv_price,
+    gl.inventory_date,
+    gl.inv_avg_price,
+    gl.inv_id,
+    gl.transaction_date,
+    0 AS profit_loss_sale,
+    0 AS profit_loss_qty_sale,
+    0 AS duration_sale,
+    0 AS cgt_sale,
+    0 AS tax_percent_sale,
+    c.trn_code,
+    c.tax_reason
+   FROM (SELECT fv.transaction_date AS settlement_date,
+    fv.participant_id,
+    fv.uin,
+    fv.isin,
+    fv.account_number,
+    fv.outgoing_qty AS cgt_taxiable_qty,
+    fv.outgoing_value,
+    fv.trn_code,
+    fv.reason_code AS tax_reason,
+    fv.ncc_trn_id,
+    fv.acc_out_id,
+    fv.outgoing_price
+   FROM ( SELECT c1.transaction_date,
+            c1.participant_id,
+            c1.uin,
+            c1.isin,
+            c1.account_number,
+            c1.outgoing_qty,
+            c1.outgoing_value,
+            r.reason_code,
+            c1.ncc_trn_id,
+            c1.acc_out_id,
+            c1.outgoing_price,
+            c1.trn_code,
+            c1.opr_code,
+            s.sec_type_id,
+                CASE
+                    WHEN c1.trn_code::text = 'E060'::text AND c1.opr_code::text = 'DLST'::text THEN
+                    CASE s.sec_type_id
+                        WHEN 3::character varying THEN 'Y'::text
+                        ELSE 'N'::text
+                    END::bpchar
+                    ELSE r.tax_applicable
+                END AS tax_applicable
+           FROM cgtlive.cgt_account_outgoing_view_wid c1,
+            cgtlive.cgt_regulations r,
+            ncsslive.security s
+          WHERE c1.trn_code::text = r.trn_code::text AND c1.opr_code::text = r.opr_code::text AND c1.reason_code::text = r.reason_code::text AND r.inventory_applicable = 'Y'::bpchar AND r.io_flag = 'O'::bpchar AND c1.isin::text = s.isin::text and c1.transaction_date between '01/01/2019' and '31/01/2019') fv
+  WHERE fv.tax_applicable = 'Y'::bpchar) c,
+    cgtlive.cgt_global_fifo_inv_relation gl
+  WHERE c.ncc_trn_id = gl.all_type_out_id AND c.acc_out_id = gl.all_type_out_det_id AND gl.outgoing_type IN ('N', 'C') AND c.settlement_date between '01/01/2019' and '31/01/2019' AND c.settlement_date between '01/01/2019' and '31/01/2019' AND c.settlement_date = gl.transaction_date) o
+                                  GROUP BY o.settlement_date, o.uin, o.participant_id, o.isin, o.account_number, o.inv_participant_id, o.inv_account_number, o.inventory_date, o.inv_id, o.transaction_date, o.trn_code, o.tax_reason) oug, 
+                              ( SELECT cgt_profitloss_vw_with_inv_id.transaction_date,
+    cgt_profitloss_vw_with_inv_id.participant_id,
+    cgt_profitloss_vw_with_inv_id.isin,
+    cgt_profitloss_vw_with_inv_id.uin,
+    cgt_profitloss_vw_with_inv_id.account_number,
+    cgt_profitloss_vw_with_inv_id.profit_loss_qty,
+    cgt_profitloss_vw_with_inv_id.profit_loss,
+    cgt_profitloss_vw_with_inv_id.duration,
+    cgt_profitloss_vw_with_inv_id.tax_percent,
+    cgt_profitloss_vw_with_inv_id.cgt,
+    cgt_profitloss_vw_with_inv_id.type,
+    cgt_profitloss_vw_with_inv_id.inventory_date,
+    cgt_profitloss_vw_with_inv_id.inv_id,
+    cgt_profitloss_vw_with_inv_id.filer_non_filer
+   FROM cgt_bef_list.cgt_profitloss_vw_with_inv_id
+   where cgt_profitloss_vw_with_inv_id.transaction_date between '01/01/2019' and '31/01/2019'
+UNION ALL
+ SELECT cgt_profitloss_vw_with_inv_id.transaction_date,
+    cgt_profitloss_vw_with_inv_id.participant_id,
+    cgt_profitloss_vw_with_inv_id.isin,
+    cgt_profitloss_vw_with_inv_id.uin,
+    cgt_profitloss_vw_with_inv_id.account_number,
+    cgt_profitloss_vw_with_inv_id.profit_loss_qty,
+    cgt_profitloss_vw_with_inv_id.profit_loss,
+    cgt_profitloss_vw_with_inv_id.duration,
+    cgt_profitloss_vw_with_inv_id.tax_percent,
+    cgt_profitloss_vw_with_inv_id.cgt,
+    cgt_profitloss_vw_with_inv_id.type,
+    cgt_profitloss_vw_with_inv_id.inventory_date,
+    cgt_profitloss_vw_with_inv_id.inv_id,
+    cgt_profitloss_vw_with_inv_id.filer_non_filer
+   FROM cgtlive.cgt_profitloss_vw_with_inv_id
+   where cgt_profitloss_vw_with_inv_id.transaction_date between '01/01/2019' and '31/01/2019' ) p,
+                            cgtlive.cgt_eligible_cm elg_1
+                          WHERE p.isin = oug.isin AND p.uin = oug.uin AND oug.participant_id = elg_1.participant_id AND p.participant_id = oug.participant_id AND p.account_number = oug.account_number AND p.transaction_date = oug.transaction_date AND p.inv_id = oug.inv_id
+                          GROUP BY oug.settlement_date, oug.uin, oug.participant_id, oug.isin, oug.account_number, oug.cgt_taxiable_qty, oug.tax_outgoing_value, oug.inv_participant_id, oug.inv_account_number, oug.inv_outgoing_qty, oug.inv_price, oug.inventory_date, oug.inv_avg_price, oug.trn_code, oug.tax_reason) sub1
+                UNION ALL
+                 SELECT c.settlement_date,
+                    c.uin,
+                    c.participant_id,
+                    c.isin,
+                    c.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    0 AS cgt_taxiable_qty,
+                    gl.inv_outgoing_qty AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    gl.inv_outgoing_qty * c.outgoing_price AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    gl.inv_participant_id,
+                    gl.inv_account_number,
+                    gl.inv_outgoing_qty,
+                    gl.inv_price,
+                    gl.inventory_date,
+                    gl.inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Non-Market Based' AS trans_type,
+                    c.trn_code,
+                    c.in_reason AS reason_code
+                   FROM ( SELECT fv.transaction_date AS settlement_date,
+    fv.participant_id,
+    fv.uin,
+    fv.isin,
+    fv.account_number,
+    fv.outgoing_qty AS cgt_nontax_qty,
+    fv.outgoing_value,
+    fv.trn_code,
+    fv.reason_code AS in_reason,
+    fv.ncc_trn_id,
+    fv.acc_out_id,
+    fv.outgoing_price
+   FROM ( SELECT c1.transaction_date,
+            c1.participant_id,
+            c1.uin,
+            c1.isin,
+            c1.account_number,
+            c1.outgoing_qty,
+            c1.outgoing_value,
+            r.reason_code,
+            c1.ncc_trn_id,
+            c1.acc_out_id,
+            c1.outgoing_price,
+            c1.trn_code,
+            c1.opr_code,
+            s.sec_type_id,
+                CASE
+                    WHEN c1.trn_code::text = 'E060'::text AND c1.opr_code::text = 'DLST'::text THEN
+                    CASE s.sec_type_id
+                        WHEN 3::character varying THEN 'Y'::text
+                        ELSE 'N'::text
+                    END::bpchar
+                    ELSE r.tax_applicable
+                END AS tax_applicable
+           FROM cgtlive.cgt_account_outgoing_view_wid c1,
+            cgtlive.cgt_regulations r,
+            ncsslive.security s
+          WHERE c1.trn_code::text = r.trn_code::text AND c1.opr_code::text = r.opr_code::text AND c1.reason_code::text = r.reason_code::text AND r.inventory_applicable = 'Y'::bpchar AND r.io_flag = 'O'::bpchar AND c1.isin::text = s.isin::text and c1.transaction_date between '01/01/2019' and '31/01/2019') fv
+  WHERE fv.tax_applicable = 'N'::bpchar) c
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON c.settlement_date = fnf.settlement_date AND c.uin = fnf.uin,
+                    cgtlive.cgt_global_fifo_inv_relation gl,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE c.ncc_trn_id = gl.all_type_out_id AND c.acc_out_id = gl.all_type_out_det_id AND c.participant_id = elg_1.participant_id AND gl.participant_id = elg_1.participant_id AND gl.outgoing_type  IN ('N', 'C') AND c.settlement_date = gl.transaction_date AND c.settlement_date between '01/01/2019' and '31/01/2019'
+                UNION ALL
+                 SELECT x.settlement_date AS transaction_date,
+                    x.uin,
+                    x.participant_id,
+                    x.isin,
+                    x.account_number,
+                    x.sell_qty,
+                    x.sell_price AS sell_rate,
+                    x.sell_value,
+                    0 AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    x.sell_expense,
+                    NULL AS inv_participant_id,
+                    0 AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Market Based' AS trans_type,
+                    '' AS trn_code,
+                    '' AS reason_code
+                   FROM ( SELECT b.settlement_date,
+                            b.participant_id,
+                            b.uin,
+                            b.isin,
+                            b.account_number,
+                            b.sell_qty,
+                            b.sell_price,
+                            b.sell_value,
+                            b.sell_expense,
+                            b.market_tran_id,
+                            b.acc_out_id
+                           FROM ( SELECT a.settlement_date,
+                                    a.participant_id,
+                                    a.uin,
+                                    a.isin,
+                                    a.account_number,
+                                    a.sell_qty,
+                                    a.sell_price,
+                                    a.sell_value,
+                                    a.sell_expense,
+                                    a.market_tran_id,
+                                    1 AS acc_out_id
+                                   FROM cgtlive.cgt_account_sale a
+                                  WHERE a.settlement_date between '01/01/2019' and '31/01/2019') b
+                          WHERE NOT (EXISTS ( SELECT COALESCE(a.all_type_out_id, 0) AS "coalesce",
+                                    COALESCE(a.all_type_out_det_id, 0) AS "coalesce"
+                                   FROM ( SELECT a_1.transaction_date,
+    a_1.participant_id,
+    a_1.uin,
+    a_1.isin,
+    a_1.account_number,
+    a_1.inv_outgoing_qty,
+    a_1.all_type_out_id,
+    a_1.all_type_out_det_id
+   FROM cgtlive.cgt_global_fifo_inv_relation a_1
+  WHERE a_1.transaction_date between '01/01/2019' and '31/01/2019') a
+                                  WHERE a.all_type_out_id = b.market_tran_id))) x
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON x.uin = fnf.uin AND x.settlement_date = fnf.settlement_date,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE to_char(x.settlement_date, 'MON') = 'JAN' AND to_char(x.settlement_date, 'YYYY') = '2019' AND x.participant_id = elg_1.participant_id
+                UNION ALL
+                 SELECT x.transaction_date,
+                    x.uin,
+                    x.participant_id,
+                    x.isin,
+                    x.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    x.outgoing_qty AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    x.outgoing_value AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    NULL AS inv_participant_id,
+                    0 AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Non-Market Based' AS trans_type,
+                    x.trn_code,
+                    x.reason_code
+                   FROM ( SELECT foo.transaction_date,
+                            foo.participant_id,
+                            foo.uin,
+                            foo.isin,
+                            foo.account_number,
+                            foo.outgoing_qty,
+                            foo.outgoing_price,
+                            foo.outgoing_value,
+                            foo.ncc_trn_id,
+                            foo.acc_out_id,
+                            foo.trn_code,
+                            foo.reason_code
+                           FROM ( SELECT a.transaction_date,
+                                    a.participant_id,
+                                    a.uin,
+                                    a.isin,
+                                    a.account_number,
+                                    a.outgoing_qty,
+                                    a.outgoing_price,
+                                    a.outgoing_value,
+                                    a.ncc_trn_id,
+                                    a.acc_out_id,
+                                    a.trn_code,
+                                    a.reason_code
+                                   FROM cgtlive.cgt_account_outgoing a
+                                  WHERE a.tax_applicable = 'Y' AND a.transaction_date between '01/01/2019' and '31/01/2019'
+                                UNION ALL
+                                 SELECT foo_1.transaction_date,
+                                    foo_1.participant_id,
+                                    foo_1.uin,
+                                    foo_1.isin,
+                                    foo_1.account_number,
+                                    foo_1.outgoing_qty,
+                                    foo_1.outgoing_price,
+                                    foo_1.outgoing_value,
+                                    foo_1.ncc_trn_id,
+                                    foo_1.acc_out_id,
+                                    foo_1.trn_code,
+                                    foo_1.reason_code
+                                   FROM ( SELECT c.transaction_date,
+    c.participant_id,
+    c.uin,
+    c.isin,
+    c.account_number,
+    c.outgoing_qty,
+    c.outgoing_price,
+    c.outgoing_value,
+    c.ncc_trn_id,
+    c.acc_out_id,
+  CASE
+   WHEN c.trn_code = 'E060' AND c.opr_code = 'DLST' THEN
+   CASE
+    WHEN s_1.sec_type_id = '3' THEN 'Y'
+    ELSE 'N'
+   END
+   ELSE c.tax_applicable
+  END AS tax_applicable,
+    c.trn_code,
+    c.reason_code
+   FROM cgtlive.cgt_corporateaction_outgoing c,
+    ncsslive.security s_1
+  WHERE c.isin = s_1.isin AND c.transaction_date between '01/01/2019' and '31/01/2019') foo_1
+                                  WHERE foo_1.tax_applicable = 'Y') foo
+                          WHERE NOT ((foo.ncc_trn_id, foo.acc_out_id) IN ( SELECT COALESCE(foo_1.all_type_out_id, 0) AS "coalesce",
+                                    COALESCE(foo_1.all_type_out_det_id, 0) AS "coalesce"
+                                   FROM ( SELECT a.transaction_date,
+    a.participant_id,
+    a.uin,
+    a.isin,
+    a.account_number,
+    a.inv_outgoing_qty,
+    a.all_type_out_id,
+    a.all_type_out_det_id
+   FROM cgtlive.cgt_global_fifo_inv_relation a
+  WHERE a.transaction_date between '01/01/2019' and '31/01/2019') foo_1))) x
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON x.uin = fnf.uin AND x.transaction_date = fnf.settlement_date,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE to_char(x.transaction_date, 'MON') = 'JAN' AND to_char(x.transaction_date, 'YYYY') = '2019' AND x.participant_id = elg_1.participant_id
+                UNION ALL
+                 SELECT x.transaction_date,
+                    x.uin,
+                    x.participant_id,
+                    x.isin,
+                    x.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    0 AS cgt_taxiable_qty,
+                    x.outgoing_qty AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    x.outgoing_value AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    NULL AS inv_participant_id,
+                    0 AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Non-Market Based' AS trans_type,
+                    x.trn_code,
+                    x.reason_code
+                   FROM ( SELECT foo.transaction_date,
+                            foo.participant_id,
+                            foo.uin,
+                            foo.isin,
+                            foo.account_number,
+                            foo.outgoing_qty,
+                            foo.outgoing_price,
+                            foo.outgoing_value,
+                            foo.ncc_trn_id,
+                            foo.acc_out_id,
+                            foo.trn_code,
+                            foo.reason_code
+                           FROM ( SELECT a.transaction_date,
+                                    a.participant_id,
+                                    a.uin,
+                                    a.isin,
+                                    a.account_number,
+                                    a.outgoing_qty,
+                                    a.outgoing_price,
+                                    a.outgoing_value,
+                                    a.ncc_trn_id,
+                                    a.acc_out_id,
+                                    a.trn_code,
+                                    a.reason_code
+                                   FROM cgtlive.cgt_account_outgoing a
+                                  WHERE a.tax_applicable = 'N' AND a.transaction_date between '01/01/2019' and '31/01/2019'
+                                UNION ALL
+                                 SELECT foo_1.transaction_date,
+                                    foo_1.participant_id,
+                                    foo_1.uin,
+                                    foo_1.isin,
+                                    foo_1.account_number,
+                                    foo_1.outgoing_qty,
+                                    foo_1.outgoing_price,
+                                    foo_1.outgoing_value,
+                                    foo_1.ncc_trn_id,
+                                    foo_1.acc_out_id,
+                                    foo_1.trn_code,
+                                    foo_1.reason_code
+                                   FROM ( SELECT c.transaction_date,
+    c.participant_id,
+    c.uin,
+    c.isin,
+    c.account_number,
+    c.outgoing_qty,
+    c.outgoing_price,
+    c.outgoing_value,
+    c.ncc_trn_id,
+    c.acc_out_id,
+  CASE
+   WHEN c.trn_code = 'E060' AND c.opr_code = 'DLST' THEN
+   CASE
+    WHEN s_1.sec_type_id = '3' THEN 'Y'
+    ELSE 'N'
+   END
+   ELSE c.tax_applicable
+  END AS tax_applicable,
+    c.trn_code,
+    c.reason_code
+   FROM cgtlive.cgt_corporateaction_outgoing c,
+    ncsslive.security s_1
+  WHERE c.isin = s_1.isin AND c.transaction_date between '01/01/2019' and '31/01/2019') foo_1
+                                  WHERE foo_1.tax_applicable = 'N') foo
+                          WHERE NOT ((foo.ncc_trn_id, foo.acc_out_id) IN ( SELECT COALESCE(foo_1.all_type_out_id, 0) AS "coalesce",
+                                    COALESCE(foo_1.all_type_out_det_id, 0) AS "coalesce"
+                                   FROM ( SELECT a.transaction_date,
+    a.participant_id,
+    a.uin,
+    a.isin,
+    a.account_number,
+    a.inv_outgoing_qty,
+    a.all_type_out_id,
+    a.all_type_out_det_id
+   FROM cgtlive.cgt_global_fifo_inv_relation a
+  WHERE a.transaction_date between '01/01/2019' and '31/01/2019') foo_1))) x
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON x.transaction_date = fnf.settlement_date AND x.uin = fnf.uin,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE to_char(x.transaction_date, 'MON') = 'JAN' AND to_char(x.transaction_date, 'YYYY') = '2019' AND x.participant_id = elg_1.participant_id
+                UNION ALL
+                 SELECT x.transaction_date,
+                    x.uin,
+                    x.participant_id,
+                    x.isin,
+                    x.account_number,
+                    x.market_qty - x.non_market_qty AS sell_qty,
+                    x.sell_price AS sell_rate,
+                    (x.market_qty - x.non_market_qty) * x.sell_price AS sell_value,
+                    0 AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    x.sell_expense / x.market_qty * (x.market_qty - x.non_market_qty) AS sell_expense,
+                    NULL AS inv_participant_id,
+                    0 AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Market Based' AS trans_type,
+                    '' AS trn_code,
+                    '' AS reason_code
+                   FROM ( SELECT s_1.settlement_date AS transaction_date,
+                            s_1.participant_id,
+                            s_1.uin,
+                            s_1.isin,
+                            s_1.account_number,
+                            sum(s_1.sell_qty) AS market_qty,
+                            sum(s_1.sell_value) / sum(s_1.sell_qty) AS sell_price,
+                            sum(fr.inv_outgoing_qty) AS non_market_qty,
+                            sum(s_1.sell_expense) AS sell_expense
+                           FROM cgtlive.cgt_account_sale s_1,
+                            ( SELECT sum(gl.inv_outgoing_qty) AS inv_outgoing_qty,
+                                    gl.profit_loss_tag,
+                                    gl.transaction_date,
+                                    gl.uin,
+                                    gl.account_number,
+                                    gl.participant_id,
+                                    gl.isin,
+                                    gl.all_type_out_id,
+                                    gl.all_type_out_det_id,
+                                    gl.outgoing_type
+                                   FROM cgtlive.cgt_global_fifo_inv_relation gl
+                                  WHERE gl.transaction_date between '01/01/2019' AND  '31/01/2019'
+                                  GROUP BY gl.profit_loss_tag, gl.transaction_date, gl.uin, gl.account_number, gl.participant_id, gl.isin, gl.all_type_out_id, gl.all_type_out_det_id, gl.outgoing_type) fr
+                          WHERE s_1.market_tran_id = fr.all_type_out_id AND fr.outgoing_type = 'M' AND fr.profit_loss_tag = 'Y' AND s_1.settlement_date = fr.transaction_date
+                          GROUP BY s_1.settlement_date, s_1.participant_id, s_1.uin, s_1.isin, s_1.account_number, s_1.market_tran_id
+                         HAVING sum(s_1.sell_qty) <> sum(fr.inv_outgoing_qty)) x
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON x.transaction_date = fnf.settlement_date AND x.uin = fnf.uin,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE to_char(x.transaction_date, 'MON') = 'JAN' AND to_char(x.transaction_date, 'YYYY') = '2019' AND x.participant_id = elg_1.participant_id
+                UNION ALL
+                 SELECT x.transaction_date,
+                    x.uin,
+                    x.participant_id,
+                    x.isin,
+                    x.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    x.taxiable_qty - x.taxable_outgoing_fifo AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    (x.taxiable_qty - x.taxable_outgoing_fifo) * x.outgoing_price AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    NULL AS inv_participant_id,
+                    0 AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Non-Market Based' AS trans_type,
+                    x.trn_code,
+                    x.tax_reason AS reason_code
+                   FROM ( SELECT ot.settlement_date AS transaction_date,
+                            ot.participant_id,
+                            ot.uin,
+                            ot.isin,
+                            ot.account_number,
+                            sum(ot.cgt_taxiable_qty) AS taxiable_qty,
+                            sum(fr.inv_outgoing_qty) AS taxable_outgoing_fifo,
+                            avg(ot.outgoing_price) AS outgoing_price,
+                            ot.trn_code,
+                            ot.tax_reason
+                           FROM ( SELECT fv.transaction_date AS settlement_date,
+    fv.participant_id,
+    fv.uin,
+    fv.isin,
+    fv.account_number,
+    fv.outgoing_qty AS cgt_taxiable_qty,
+    fv.outgoing_value,
+    fv.trn_code,
+    fv.reason_code AS tax_reason,
+    fv.ncc_trn_id,
+    fv.acc_out_id,
+    fv.outgoing_price
+   FROM ( SELECT c1.transaction_date,
+            c1.participant_id,
+            c1.uin,
+            c1.isin,
+            c1.account_number,
+            c1.outgoing_qty,
+            c1.outgoing_value,
+            r.reason_code,
+            c1.ncc_trn_id,
+            c1.acc_out_id,
+            c1.outgoing_price,
+            c1.trn_code,
+            c1.opr_code,
+            s.sec_type_id,
+                CASE
+                    WHEN c1.trn_code::text = 'E060'::text AND c1.opr_code::text = 'DLST'::text THEN
+                    CASE s.sec_type_id
+                        WHEN 3::character varying THEN 'Y'::text
+                        ELSE 'N'::text
+                    END::bpchar
+                    ELSE r.tax_applicable
+                END AS tax_applicable
+           FROM cgtlive.cgt_account_outgoing_view_wid c1,
+            cgtlive.cgt_regulations r,
+            ncsslive.security s
+          WHERE c1.trn_code::text = r.trn_code::text AND c1.opr_code::text = r.opr_code::text AND c1.reason_code::text = r.reason_code::text AND r.inventory_applicable = 'Y'::bpchar AND r.io_flag = 'O'::bpchar AND c1.isin::text = s.isin::text and c1.transaction_date  between '01/01/2019' AND  '31/01/2019') fv
+  WHERE fv.tax_applicable = 'Y'::bpchar) ot,
+                            ( SELECT sum(gl.inv_outgoing_qty) AS inv_outgoing_qty,
+                                    gl.profit_loss_tag,
+                                    gl.transaction_date,
+                                    gl.uin,
+                                    gl.account_number,
+                                    gl.participant_id,
+                                    gl.isin,
+                                    gl.all_type_out_id,
+                                    gl.all_type_out_det_id,
+                                    gl.outgoing_type
+                                   FROM cgtlive.cgt_global_fifo_inv_relation gl
+                                  WHERE gl.transaction_date between '01/01/2019' AND  '31/01/2019'
+                                  GROUP BY gl.profit_loss_tag, gl.transaction_date, gl.uin, gl.account_number, gl.participant_id, gl.isin, gl.all_type_out_id, gl.all_type_out_det_id, gl.outgoing_type) fr
+                          WHERE ot.ncc_trn_id = fr.all_type_out_id AND fr.outgoing_type IN ('N', 'C') AND fr.profit_loss_tag = 'Y' AND ot.settlement_date = fr.transaction_date
+                          GROUP BY ot.settlement_date, ot.participant_id, ot.uin, ot.isin, ot.account_number, ot.ncc_trn_id, ot.trn_code, ot.tax_reason
+                         HAVING sum(ot.cgt_taxiable_qty) <> sum(fr.inv_outgoing_qty)) x
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON x.transaction_date = fnf.settlement_date AND x.uin = fnf.uin,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE to_char(x.transaction_date, 'MON') = 'JAN' AND to_char(x.transaction_date, 'YYYY') = '2019' AND x.participant_id = elg_1.participant_id
+                UNION ALL
+                 SELECT x.transaction_date,
+                    x.uin,
+                    x.participant_id,
+                    x.isin,
+                    x.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    0 AS cgt_taxiable_qty,
+                    x.nontax_qty - x.non_taxable_outgoing_fifo AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    (x.nontax_qty - x.non_taxable_outgoing_fifo) * x.outgoing_price AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    NULL AS inv_participant_id,
+                    0 AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    0 AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    0 AS duration_taxable,
+                    0 AS cgt_taxable,
+                    0 AS tax_percent_taxable,
+                    'Non-Market Based' AS trans_type,
+                    x.trn_code,
+                    x.in_reason AS reason_code
+                   FROM ( SELECT ot.settlement_date AS transaction_date,
+                            ot.participant_id,
+                            ot.uin,
+                            ot.isin,
+                            ot.account_number,
+                            sum(ot.cgt_nontax_qty) AS nontax_qty,
+                            sum(fr.inv_outgoing_qty) AS non_taxable_outgoing_fifo,
+                            avg(ot.outgoing_price) AS outgoing_price,
+                            ot.trn_code,
+                            ot.in_reason
+                           FROM ( SELECT fv.transaction_date AS settlement_date,
+    fv.participant_id,
+    fv.uin,
+    fv.isin,
+    fv.account_number,
+    fv.outgoing_qty AS cgt_nontax_qty,
+    fv.outgoing_value,
+    fv.trn_code,
+    fv.reason_code AS in_reason,
+    fv.ncc_trn_id,
+    fv.acc_out_id,
+    fv.outgoing_price
+   FROM ( SELECT c1.transaction_date,
+            c1.participant_id,
+            c1.uin,
+            c1.isin,
+            c1.account_number,
+            c1.outgoing_qty,
+            c1.outgoing_value,
+            r.reason_code,
+            c1.ncc_trn_id,
+            c1.acc_out_id,
+            c1.outgoing_price,
+            c1.trn_code,
+            c1.opr_code,
+            s.sec_type_id,
+                CASE
+                    WHEN c1.trn_code::text = 'E060'::text AND c1.opr_code::text = 'DLST'::text THEN
+                    CASE s.sec_type_id
+                        WHEN 3::character varying THEN 'Y'::text
+                        ELSE 'N'::text
+                    END::bpchar
+                    ELSE r.tax_applicable
+                END AS tax_applicable
+           FROM cgtlive.cgt_account_outgoing_view_wid c1,
+            cgtlive.cgt_regulations r,
+            ncsslive.security s
+          WHERE c1.trn_code::text = r.trn_code::text AND c1.opr_code::text = r.opr_code::text AND c1.reason_code::text = r.reason_code::text AND r.inventory_applicable = 'Y'::bpchar AND r.io_flag = 'O'::bpchar AND c1.isin::text = s.isin::text and c1.transaction_date between '01/01/2019' AND  '31/01/2019') fv
+  WHERE fv.tax_applicable = 'N'::bpchar) ot,
+                            ( SELECT sum(gl.inv_outgoing_qty) AS inv_outgoing_qty,
+                                    gl.profit_loss_tag,
+                                    gl.transaction_date,
+                                    gl.uin,
+                                    gl.account_number,
+                                    gl.participant_id,
+                                    gl.isin,
+                                    gl.all_type_out_id,
+                                    gl.all_type_out_det_id,
+                                    gl.outgoing_type
+                                   FROM cgtlive.cgt_global_fifo_inv_relation gl
+                                  WHERE gl.transaction_date between '01/01/2019' AND  '31/01/2019'
+                                  GROUP BY gl.profit_loss_tag, gl.transaction_date, gl.uin, gl.account_number, gl.participant_id, gl.isin, gl.all_type_out_id, gl.all_type_out_det_id, gl.outgoing_type) fr
+                          WHERE ot.ncc_trn_id = fr.all_type_out_id AND ot.acc_out_id = fr.all_type_out_det_id AND fr.outgoing_type IN ('N', 'C') AND fr.profit_loss_tag = 'N' AND ot.settlement_date = fr.transaction_date
+                          GROUP BY ot.settlement_date, ot.participant_id, ot.uin, ot.isin, ot.account_number, ot.ncc_trn_id, ot.trn_code, ot.in_reason
+                         HAVING sum(ot.cgt_nontax_qty) <> sum(fr.inv_outgoing_qty)) x
+                     LEFT JOIN cgtlive.cgt_filer_non_filer_status fnf ON x.transaction_date = fnf.settlement_date AND x.uin = fnf.uin,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE to_char(x.transaction_date, 'MON') = 'JAN' AND to_char(x.transaction_date, 'YYYY') = '2019' AND x.participant_id = elg_1.participant_id
+                UNION ALL
+                 SELECT fnf.transaction_date,
+                    fnf.uin,
+                    fnf.participant_id,
+                    fnf.isin,
+                    fnf.account_number,
+                    0 AS sell_qty,
+                    0 AS sell_rate,
+                    0 AS sell_value,
+                    fnf.profit_loss_qty AS cgt_taxiable_qty,
+                    0 AS cgt_nontax_qty,
+                    0 AS tax_outgoing_value,
+                    0 AS in_tax_outgoing_value,
+                    0 AS sell_expense,
+                    NULL AS inv_participant_id,
+                    NULL AS inv_account_number,
+                    0 AS inv_outgoing_qty,
+                    0 AS inv_price,
+                    NULL AS inventory_date,
+                    0 AS inv_avg_price,
+                    0 AS profit_loss_sale,
+                    0 AS profit_loss_qty_sale,
+                    0 AS duration_sale,
+                    0 AS cgt_sale,
+                    0 AS tax_percent_sale,
+                    fnf.profit_loss AS profit_loss_taxable,
+                    0 AS profit_loss_qty_taxable,
+                    fnf.duration AS duration_taxable,
+                    fnf.capital_gain_tax AS cgt_taxable,
+                    fnf.tax_percent AS tax_percent_taxable,
+                    'Close-out/Square-Up' AS trans_type,
+                    '' AS trn_code,
+                    '' AS reason_code
+                   FROM cgtlive.cgt_non_inventory_pl_fnf_view fnf,
+                    cgtlive.cgt_eligible_cm elg_1
+                  WHERE fnf.transaction_date between '01/01/2019' and '31/01/2019' AND fnf.participant_id = elg_1.participant_id) temp
+		 where temp.settlement_date  between '01/01/2019' and '31/01/2019'
+          GROUP BY temp.settlement_date, temp.uin, temp.participant_id, temp.isin, temp.account_number, temp.inv_participant_id, temp.inv_account_number, temp.inventory_date, temp.trans_type, temp.trn_code, temp.reason_code) mview
+     JOIN ncsslive.cgt_eligible_cm elg ON mview.participant_id = elg.participant_id
+     JOIN ncsslive.security s ON mview.isin = s.isin
+     JOIN ( SELECT a.uin,
+            a.uin_name
+           FROM cgtlive.cgt_eligible_uin_all a
+           left join cgtlive.cgt_ipo_uin b on a.uin = b.ipo_uin where b.ipo_uin is null) u ON mview.uin = u.uin
+  ORDER BY mview.participant_id, mview.uin, mview.settlement_date, s.symbol, mview.trans_type, mview.trn_code, mview.reason_code;
