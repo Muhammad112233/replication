@@ -131,3 +131,5 @@ tion_state | replication_sync_state | last_status_change
 (2 rows)
 
 --if it shows like above then it configured successfully.
+
+After switchover must delete the file pgpool_status on down server.
